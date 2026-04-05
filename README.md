@@ -1,3 +1,7 @@
+# Weekly TF Task
+
+The core concept students needed to understand is the difference between naive generation, retrieval only, and RAG and how to add guardrails to their logics. Students are most likely to struggle following the implementation if they are rushing it and don’t think about how they work as a whole together. The AI was helpful helping plan and implementing the functions based on the requirements. However, at the beginning, it was reading non relevant files for instructions (postman-http-____.intructions.md), it was 6 of them. One way I would guide a student without giving the answer is to encourage them to think how they would want their answers from the system and try implementing it and get it to work.
+
 # DocuBot
 
 DocuBot is a small documentation assistant that helps answer developer questions about a codebase.  
