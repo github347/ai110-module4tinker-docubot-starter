@@ -13,11 +13,11 @@ Experiment with:
 """
 
 import os
-from google import genai
+import google.generativeai as genai
 
 # Central place to update the model name if needed.
 # You can swap this for a different Gemini model in the future.
-GEMINI_MODEL_NAME = "gemma-3-27b-it"
+GEMINI_MODEL_NAME = "gemini-2.5-flash"
 
 
 class GeminiClient:
@@ -39,7 +39,8 @@ class GeminiClient:
                 "Set it in your shell or .env file to enable LLM features."
             )
 
-        self.client = genai.Client(api_key=api_key)
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel(GEMINI_MODEL_NAME)
 
     # -----------------------------------------------------------
     # Phase 0: naive generation over full docs
@@ -51,14 +52,8 @@ class GeminiClient:
     You are a documentation assistant. 
     Answer this developer question: {query}
     """
-        try:
-            response = self.client.models.generate_content(
-                model=GEMINI_MODEL_NAME,
-                contents=prompt
-            )
-            return (response.text or "").strip()
-        except Exception as e:
-            return f"Unable to generate an answer. ({type(e).__name__}: {e})"
+        response = self.model.generate_content(prompt)
+        return (response.text or "").strip()
 
     # -----------------------------------------------------------
     # Phase 2: RAG style generation over retrieved snippets
@@ -112,11 +107,5 @@ Rules:
 - When you do answer, briefly mention which files you relied on.
 """
 
-        try:
-            response = self.client.models.generate_content(
-                model=GEMINI_MODEL_NAME,
-                contents=prompt
-            )
-            return (response.text or "").strip()
-        except Exception as e:
-            return f"API error — could not generate answer. ({type(e).__name__}: {e})"
+        response = self.model.generate_content(prompt)
+        return (response.text or "").strip()
