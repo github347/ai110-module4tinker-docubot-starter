@@ -9,6 +9,7 @@ Core DocuBot class responsible for:
 
 import os
 import glob
+import re
 
 class DocuBot:
     def __init__(self, docs_folder="docs", llm_client=None):
@@ -22,8 +23,15 @@ class DocuBot:
         # Load documents into memory
         self.documents = self.load_documents()  # List of (filename, text)
 
+        # Build paragraph-level storage for retrieval
+        self.paragraphs = self.build_paragraph_store(self.documents)
+
         # Build a retrieval index (implemented in Phase 1)
-        self.index = self.build_index(self.documents)
+        self.index = self.build_index(self.paragraphs)
+
+        # Guardrail thresholds for "meaningful evidence"
+        self.min_evidence_score = 2
+        self.min_evidence_coverage = 0.4
 
     # -----------------------------------------------------------
     # Document Loading
@@ -48,7 +56,29 @@ class DocuBot:
     # Index Construction (Phase 1)
     # -----------------------------------------------------------
 
-    def build_index(self, documents):
+    def _tokenize(self, text):
+        return re.findall(r"\b\w+\b", text.lower())
+
+    def _split_paragraphs(self, text):
+        chunks = re.split(r"\n\s*\n", text)
+        return [chunk.strip() for chunk in chunks if chunk.strip()]
+
+    def _query_tokens(self, query):
+        stopwords = {
+            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+            "how", "i", "in", "is", "it", "of", "on", "or", "that", "the",
+            "this", "to", "what", "where", "which", "with", "you"
+        }
+        return [token for token in self._tokenize(query) if token not in stopwords]
+
+    def build_paragraph_store(self, documents):
+        paragraphs = []
+        for filename, text in documents:
+            for paragraph in self._split_paragraphs(text):
+                paragraphs.append((filename, paragraph))
+        return paragraphs
+
+    def build_index(self, paragraphs):
         """
         TODO (Phase 1):
         Build a tiny inverted index mapping lowercase words to the documents
@@ -64,7 +94,17 @@ class DocuBot:
         ignore punctuation if needed.
         """
         index = {}
-        # TODO: implement simple indexing
+        for paragraph_id, (_, paragraph_text) in enumerate(paragraphs):
+            tokens = set(self._tokenize(paragraph_text))
+            for token in tokens:
+                if token not in index:
+                    index[token] = []
+                index[token].append(paragraph_id)
+
+        # Keep deterministic ordering for easier debugging/testing
+        for token in index:
+            index[token].sort()
+
         return index
 
     # -----------------------------------------------------------
@@ -81,8 +121,11 @@ class DocuBot:
         - Count how many appear in the text
         - Return the count as the score
         """
-        # TODO: implement scoring
-        return 0
+        query_tokens = set(self._tokenize(query))
+        text_tokens = set(self._tokenize(text))
+
+        # Score = number of query words present in the document
+        return sum(1 for token in query_tokens if token in text_tokens)
 
     def retrieve(self, query, top_k=3):
         """
@@ -92,8 +135,53 @@ class DocuBot:
         Return a list of (filename, text) sorted by score descending.
         """
         results = []
-        # TODO: implement retrieval logic
-        return results[:top_k]
+
+        scored = self.retrieve_with_scores(query, top_k=top_k)
+        results = [(filename, paragraph_text) for _, filename, paragraph_text in scored]
+
+        return results
+
+    def retrieve_with_scores(self, query, top_k=3):
+        scored_results = []
+
+        query_tokens = set(self._tokenize(query))
+        if not query_tokens:
+            return scored_results
+
+        # Narrow search using inverted index
+        candidate_paragraph_ids = set()
+        for token in query_tokens:
+            candidate_paragraph_ids.update(self.index.get(token, []))
+
+        if not candidate_paragraph_ids:
+            return scored_results
+
+        scored = []
+        for paragraph_id in candidate_paragraph_ids:
+            filename, paragraph_text = self.paragraphs[paragraph_id]
+            score = self.score_document(query, paragraph_text)
+            if score > 0:
+                scored.append((score, filename, paragraph_text))
+
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        scored_results = scored[:top_k]
+
+        return scored_results
+
+    def has_meaningful_evidence(self, query, scored_snippets):
+        if not scored_snippets:
+            return False
+
+        top_score = scored_snippets[0][0]
+        query_terms = self._query_tokens(query)
+        if not query_terms:
+            return False
+
+        coverage = top_score / len(set(query_terms))
+        return (
+            top_score >= self.min_evidence_score
+            and coverage >= self.min_evidence_coverage
+        )
 
     # -----------------------------------------------------------
     # Answering Modes
@@ -104,10 +192,12 @@ class DocuBot:
         Phase 1 retrieval only mode.
         Returns raw snippets and filenames with no LLM involved.
         """
-        snippets = self.retrieve(query, top_k=top_k)
+        scored_snippets = self.retrieve_with_scores(query, top_k=top_k)
 
-        if not snippets:
+        if not self.has_meaningful_evidence(query, scored_snippets):
             return "I do not know based on these docs."
+
+        snippets = [(filename, text) for _, filename, text in scored_snippets]
 
         formatted = []
         for filename, text in snippets:
@@ -126,10 +216,12 @@ class DocuBot:
                 "RAG mode requires an LLM client. Provide a GeminiClient instance."
             )
 
-        snippets = self.retrieve(query, top_k=top_k)
+        scored_snippets = self.retrieve_with_scores(query, top_k=top_k)
 
-        if not snippets:
+        if not self.has_meaningful_evidence(query, scored_snippets):
             return "I do not know based on these docs."
+
+        snippets = [(filename, text) for _, filename, text in scored_snippets]
 
         return self.llm_client.answer_from_snippets(query, snippets)
 
